@@ -24,37 +24,31 @@ namespace Edgar.GraphBasedGenerator.Grid2D.Drawing
         protected void DrawGrid(PolygonGrid2D polygon)
         {
             var rectangles = polygonPartitioning.GetPartitions(polygon);
-            var points = new HashSet<Vector2Int>();
-
-            foreach (var rectangle in rectangles)
+            using (var gridPen = new Pen(Color.FromArgb(100, 100, 100), 0.05f))
             {
-                for (int i = rectangle.A.X; i <= rectangle.B.X; i++)
+                gridPen.DashStyle = DashStyle.Dash;
+                gridPen.DashPattern = new float[] {1.2f, 3.1f};
+                gridPen.DashOffset = 0.5f;
+
+                // Draw per-rectangle continuous grid lines instead of
+                // building a HashSet of all interior points and checking neighbors.
+                // This reduces complexity from O(area) draw calls to O(width+height) per partition.
+                foreach (var rectangle in rectangles)
                 {
-                    for (int j = rectangle.A.Y; j <= rectangle.B.Y; j++)
+                    var xStart = rectangle.A.X;
+                    var xEnd = rectangle.B.X;
+                    var yStart = rectangle.A.Y;
+                    var yEnd = rectangle.B.Y;
+
+                    for (int x = xStart; x <= xEnd; x++)
                     {
-                        points.Add(new Vector2Int(i, j));
+                        graphics.DrawLine(gridPen, x, yStart, x, yEnd);
                     }
-                }
-            }
 
-            var gridPen = new Pen(Color.FromArgb(100, 100, 100), 0.05f);
-            gridPen.DashStyle = DashStyle.Dash;
-            gridPen.DashPattern = new float[] {1.2f, 3.1f};
-            gridPen.DashOffset = 0.5f;
-
-            foreach (var point in points)
-            {
-                var right = point + new Vector2Int(1, 0);
-                var bottom = point + new Vector2Int(0, -1);
-
-                if (points.Contains(right))
-                {
-                    graphics.DrawLine(gridPen, point.X, point.Y, right.X, right.Y);
-                }
-
-                if (points.Contains(bottom))
-                {
-                    graphics.DrawLine(gridPen, point.X, point.Y, bottom.X, bottom.Y);
+                    for (int y = yStart; y <= yEnd; y++)
+                    {
+                        graphics.DrawLine(gridPen, xStart, y, xEnd, y);
+                    }
                 }
             }
         }
@@ -96,30 +90,49 @@ namespace Edgar.GraphBasedGenerator.Grid2D.Drawing
         protected void DrawHatching(PolygonGrid2D outline, List<Tuple<RectangleGrid2D, List<Vector2>>> usedPoints,
             Range<float> hatchingClusterOffset, Range<float> hatchingLength)
         {
-            var pen = new Pen(Color.FromArgb(50, 50, 50), 0.05f);
-
-            var usedPointsAdd = new List<Vector2>();
-
-            foreach (var line in outline.GetLines())
+            using (var pen = new Pen(Color.FromArgb(50, 50, 50), 0.05f))
             {
-                var points = line.GetPoints().Select(x => (Vector2) x).ToList();
-                points.AddRange(points.Select(x => x + 0.5f * (Vector2) line.GetDirectionVector()).ToList());
-
-
-                for (var i = 0; i < points.Count; i++)
+                // Build a fast lookup of already-used hatching anchor points.
+                // The previous implementation scanned all prior rooms/points per candidate (O(n^2)).
+                var usedPointKeys = new HashSet<long>();
+                if (usedPoints.Count > 0)
                 {
-                    var point = points[i];
-
-                    if (true)
+                    foreach (var entry in usedPoints)
                     {
-                        var direction = (Vector2) line.GetDirectionVector();
-                        var directionPerpendicular = new Vector2(Math.Max(-1, Math.Min(1, direction.Y)),
-                            Math.Max(-1, Math.Min(1, direction.X)));
-
-                        if (direction.Y != 0)
+                        var prior = entry.Item2;
+                        if (prior == null)
                         {
-                            directionPerpendicular = -1 * directionPerpendicular;
+                            continue;
                         }
+
+                        for (int i = 0; i < prior.Count; i++)
+                        {
+                            usedPointKeys.Add(QuantizeHatchingKey(prior[i]));
+                        }
+                    }
+                }
+
+                var usedPointsAdd = new List<Vector2>();
+
+                foreach (var line in outline.GetLines())
+                {
+                    var direction = (Vector2) line.GetDirectionVector();
+                    var directionPerpendicular = new Vector2(
+                        Math.Max(-1, Math.Min(1, direction.Y)),
+                        Math.Max(-1, Math.Min(1, direction.X))
+                    );
+
+                    if (direction.Y != 0)
+                    {
+                        directionPerpendicular = -1 * directionPerpendicular;
+                    }
+
+                    var points = line.GetPoints().Select(x => (Vector2) x).ToList();
+                    points.AddRange(points.Select(x => x + 0.5f * direction).ToList());
+
+                    for (var i = 0; i < points.Count; i++)
+                    {
+                        var point = points[i];
 
                         for (int j = 0; j < 2; j++)
                         {
@@ -134,19 +147,15 @@ namespace Edgar.GraphBasedGenerator.Grid2D.Drawing
                             }
 
                             var c = point + offsetLength * directionPerpendicular;
+                            var key = QuantizeHatchingKey(c);
 
-                            // TODO: very ugly
-                            if (usedPoints.Any(x =>
-                                    Vector2.MaxDistance(x.Item1.Center, c) <
-                                    Math.Max(x.Item1.Width, x.Item1.Height) + 5 &&
-                                    x.Item2.Any(y => Vector2.EuclideanDistance(y, c) < 0.5f)))
+                            if (usedPointKeys.Contains(key))
                             {
                                 continue;
                             }
-                            else
-                            {
-                                usedPointsAdd.Add(c);
-                            }
+
+                            usedPointKeys.Add(key);
+                            usedPointsAdd.Add(c);
 
                             for (int k = -1; k <= 1; k++)
                             {
@@ -166,9 +175,21 @@ namespace Edgar.GraphBasedGenerator.Grid2D.Drawing
                         }
                     }
                 }
-            }
 
-            usedPoints.Add(new Tuple<RectangleGrid2D, List<Vector2>>(outline.BoundingRectangle, usedPointsAdd));
+                usedPoints.Add(new Tuple<RectangleGrid2D, List<Vector2>>(outline.BoundingRectangle, usedPointsAdd));
+            }
+        }
+
+        private static long QuantizeHatchingKey(Vector2 point)
+        {
+            // Quantize to half-grid resolution to approximate the old
+            // "distance < 0.5f" duplicate suppression without scanning lists.
+            var qx = (int) Math.Round(point.X * 2f);
+            var qy = (int) Math.Round(point.Y * 2f);
+            unchecked
+            {
+                return ((long) qx << 32) ^ (uint) qy;
+            }
         }
 
         private float GetRandomFromRange(Range<float> range)

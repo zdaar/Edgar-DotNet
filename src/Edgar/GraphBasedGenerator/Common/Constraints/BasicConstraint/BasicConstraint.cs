@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using Edgar.GraphBasedGenerator.Common.Configurations;
 using Edgar.GraphBasedGenerator.Common.ConfigurationSpaces;
@@ -43,28 +44,70 @@ namespace Edgar.GraphBasedGenerator.Common.Constraints.BasicConstraint
 
             var overlap = 0;
             var distance = 0;
-            var neighbors = graph.GetNeighbors(node);
+            var neighborsEnumerable = graph.GetNeighbors(node);
+            var neighborsSet = neighborsEnumerable is ISet<TNode> set
+                ? set
+                : new System.Collections.Generic.HashSet<TNode>(neighborsEnumerable);
 
-            foreach (var vertex in graph.Vertices)
+            // Fast path: iterate only over configurations that are already set.
+            // This avoids scanning all vertices during partial layouts.
+            var usedPlacedConfigurations = true;
+            foreach (var otherConfiguration in layout.GetAllConfigurations())
             {
-                if (vertex.Equals(node))
-                    continue;
+                if (!(otherConfiguration is IRoomConfiguration<TNode> roomConfiguration))
+                {
+                    usedPlacedConfigurations = false;
+                    break;
+                }
 
-                if (!layout.GetConfiguration(vertex, out var c))
+                var otherNode = roomConfiguration.Room;
+                if (otherNode.Equals(node))
+                {
                     continue;
+                }
 
-                var area = ComputeOverlap(configuration, c);
+                var area = ComputeOverlap(configuration, otherConfiguration);
 
                 if (area != 0)
                 {
                     overlap += area;
                 }
-                else if (!isCorridor && neighbors.Contains(vertex))
+                else if (!isCorridor && neighborsSet.Contains(otherNode))
                 {
-                    if (!configurationSpaces.HaveValidPosition(configuration, c))
+                    if (!configurationSpaces.HaveValidPosition(configuration, otherConfiguration))
                     {
                         // TODO: this is not really accurate when there are more sophisticated door positions (as smaller distance is not always better)
-                        distance += ComputeDistance(configuration, c);
+                        distance += ComputeDistance(configuration, otherConfiguration);
+                    }
+                }
+            }
+
+            // Fallback for configurations that do not expose their owning room.
+            if (!usedPlacedConfigurations)
+            {
+                overlap = 0;
+                distance = 0;
+                foreach (var vertex in graph.Vertices)
+                {
+                    if (vertex.Equals(node))
+                        continue;
+
+                    if (!layout.GetConfiguration(vertex, out var c))
+                        continue;
+
+                    var area = ComputeOverlap(configuration, c);
+
+                    if (area != 0)
+                    {
+                        overlap += area;
+                    }
+                    else if (!isCorridor && neighborsSet.Contains(vertex))
+                    {
+                        if (!configurationSpaces.HaveValidPosition(configuration, c))
+                        {
+                            // TODO: this is not really accurate when there are more sophisticated door positions (as smaller distance is not always better)
+                            distance += ComputeDistance(configuration, c);
+                        }
                     }
                 }
             }

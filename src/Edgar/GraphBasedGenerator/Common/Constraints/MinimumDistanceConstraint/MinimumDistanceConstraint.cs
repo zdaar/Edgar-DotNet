@@ -34,13 +34,17 @@ namespace Edgar.GraphBasedGenerator.Common.Constraints.MinimumDistanceConstraint
                 return true;
 
             var wrongDistanceCount = 0;
-
-            foreach (var vertex in layout.Graph.Vertices)
+            var usedPlacedConfigurations = true;
+            foreach (var otherConfiguration in layout.GetAllConfigurations())
             {
-                if (vertex.Equals(node))
-                    continue;
+                if (!(otherConfiguration is IRoomConfiguration<TNode> roomConfiguration))
+                {
+                    usedPlacedConfigurations = false;
+                    break;
+                }
 
-                if (!layout.GetConfiguration(vertex, out var c))
+                var vertex = roomConfiguration.Room;
+                if (vertex.Equals(node))
                     continue;
 
                 if (mapDescription.GetRoomDescription(vertex).IsCorridor)
@@ -49,9 +53,33 @@ namespace Edgar.GraphBasedGenerator.Common.Constraints.MinimumDistanceConstraint
                 if (AreNeighbours(node, vertex))
                     continue;
 
-                if (!HaveMinimumDistance(configuration, c))
+                if (!HaveMinimumDistance(configuration, otherConfiguration))
                 {
                     wrongDistanceCount++;
+                }
+            }
+
+            if (!usedPlacedConfigurations)
+            {
+                wrongDistanceCount = 0;
+                foreach (var vertex in layout.Graph.Vertices)
+                {
+                    if (vertex.Equals(node))
+                        continue;
+
+                    if (!layout.GetConfiguration(vertex, out var c))
+                        continue;
+
+                    if (mapDescription.GetRoomDescription(vertex).IsCorridor)
+                        continue;
+
+                    if (AreNeighbours(node, vertex))
+                        continue;
+
+                    if (!HaveMinimumDistance(configuration, c))
+                    {
+                        wrongDistanceCount++;
+                    }
                 }
             }
 
